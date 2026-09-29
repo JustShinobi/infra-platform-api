@@ -5,6 +5,13 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      publish_image:
+        description: Publish the image and open an image promotion PR
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -18,6 +25,50 @@ env:
   UV_PYTHON_DOWNLOADS: never
 
 jobs:
+  detect-image-changes:
+    name: Detect image changes
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      image: ${{ steps.changes.outputs.image }}
+    steps:
+      - name: Check out repository history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Detect runtime image changes
+        id: changes
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          EVENT_NAME: ${{ github.event_name }}
+          FORCE_PUBLISH: ${{ inputs.publish_image }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "image=${FORCE_PUBLISH:-false}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ -z "$BEFORE_SHA" ] || [ "$BEFORE_SHA" = "0000000000000000000000000000000000000000" ]; then
+            changed_files=$(git diff-tree --root --no-commit-id --name-only -r "$GITHUB_SHA")
+          else
+            changed_files=$(git diff --name-only "$BEFORE_SHA" "$GITHUB_SHA")
+          fi
+
+          image_changed=false
+          while IFS= read -r path; do
+            case "$path" in
+              app/*|Dockerfile|.dockerignore|gunicorn.conf.py|pyproject.toml|uv.lock)
+                image_changed=true
+                break
+                ;;
+            esac
+          done <<< "$changed_files"
+
+          echo "image=$image_changed" >> "$GITHUB_OUTPUT"
+
   test-and-validate:
     name: Test and validate manifests
     runs-on: ubuntu-latest
@@ -181,10 +232,14 @@ jobs:
 
   publish:
     name: Publish container
-    if: github.event_name == 'push'
+    if: >-
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+      needs.detect-image-changes.outputs.image == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    needs: [test-and-validate, container-test]
+    needs: [detect-image-changes, test-and-validate, container-test]
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
     permissions:
       contents: read
       packages: write
@@ -214,6 +269,7 @@ jobs:
             type=raw,value=main,enable={{is_default_branch}}
 
       - name: Build and publish image
+        id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
@@ -239,3 +295,134 @@ jobs:
           path: infra-platform-api-image.tar.gz
           if-no-files-found: error
           retention-days: 1
+
+  promote:
+    name: Open image promotion PR
+    if: needs.publish.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: publish
+    permissions:
+      actions: write
+      contents: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      IMAGE_DIGEST: ${{ needs.publish.outputs.digest }}
+    steps:
+      - name: Check out main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Update overlay image digests
+        run: |
+          if ! [[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "Unexpected image digest: $IMAGE_DIGEST" >&2
+            exit 1
+          fi
+
+          for file in \
+            k8s/overlays/dev/kustomization.yaml \
+            k8s/overlays/prod/kustomization.yaml; do
+            python3 - "$file" "$IMAGE_DIGEST" <<'PY'
+          import pathlib
+          import re
+          import sys
+
+          path = pathlib.Path(sys.argv[1])
+          digest = sys.argv[2]
+          content = path.read_text(encoding="utf-8")
+          updated, replacements = re.subn(
+              r"(?m)^(\s+digest: )sha256:[0-9a-f]{64}$",
+              rf"\g<1>{digest}",
+              content,
+          )
+          if replacements != 1:
+              raise SystemExit(f"expected one digest in {path}, found {replacements}")
+          path.write_text(updated, encoding="utf-8")
+          PY
+          done
+
+          git diff --check
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@829323503d1be3d00ca8346e5391ca0b07a9ab0d # v5.1.0
+        with:
+          version: v1.36.3
+
+      - name: Validate promoted manifests
+        run: |
+          mkdir -p rendered
+          kubectl kustomize k8s/overlays/dev > rendered/dev.yaml
+          kubectl kustomize k8s/overlays/prod > rendered/prod.yaml
+          docker run --rm \
+            --volume "$PWD/rendered:/manifests:ro" \
+            ghcr.io/yannh/kubeconform@sha256:faffaf43f95aa6425306e1ab8d6fcad72acb9049158f38e574c085ea1ec0f64e \
+            -strict -summary -kubernetes-version 1.36.0 /manifests
+
+      - name: Create or update promotion pull request
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          short_sha=${SOURCE_SHA::7}
+          existing_pr=$(gh pr list \
+            --state open \
+            --base main \
+            --json number,headRefName \
+            --jq '([.[] | select(.headRefName | startswith("chore/promote-image-"))] | first) as $pr | if $pr then "\($pr.number)\t\($pr.headRefName)" else "" end')
+
+          if [ -n "$existing_pr" ]; then
+            pr_number=${existing_pr%%$'\t'*}
+            branch=${existing_pr#*$'\t'}
+            git fetch origin "refs/heads/$branch:refs/remotes/origin/$branch"
+            remote_sha=$(git rev-parse "refs/remotes/origin/$branch")
+          else
+            pr_number=""
+            branch="chore/promote-image-$short_sha"
+            remote_sha=""
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch --create "$branch"
+          git add k8s/overlays/dev/kustomization.yaml k8s/overlays/prod/kustomization.yaml
+          git commit -m "chore(kustomize): promote image $short_sha"
+
+          if [ -n "$remote_sha" ]; then
+            git push \
+              --force-with-lease="refs/heads/$branch:$remote_sha" \
+              origin "HEAD:refs/heads/$branch"
+          else
+            git push --set-upstream origin "$branch"
+          fi
+
+          cat > /tmp/promotion-pr.md <<EOF
+          ## Summary
+          Promote the container image built from commit \`$SOURCE_SHA\` using its immutable OCI digest.
+
+          ## Changes
+          - update the development overlay image digest
+          - update the production overlay image digest
+
+          ## Validation
+          - application tests, container smoke tests, dependency audit, and vulnerability scan passed before publication
+          - both overlays rendered successfully
+          - all rendered resources passed strict kubeconform validation
+
+          Source workflow: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
+          EOF
+
+          title="chore(kustomize): promote image $short_sha"
+          if [ -n "$pr_number" ]; then
+            gh pr edit "$pr_number" --title "$title" --body-file /tmp/promotion-pr.md
+          else
+            gh pr create \
+              --base main \
+              --head "$branch" \
+              --title "$title" \
+              --body-file /tmp/promotion-pr.md
+          fi
+
+          gh workflow run ci.yml --ref "$branch" -f publish_image=false

@@ -34,7 +34,7 @@ A imagem final:
 
 O Alpine foi uma escolha adequada porque as dependências atuais não exigem extensões nativas. A principal ressalva é o uso de musl: se o projeto passasse a depender de bibliotecas como NumPy ou de drivers distribuídos apenas para glibc, uma base `python:slim` seria mais previsível, mesmo com uma imagem maior.
 
-O pipeline publica `main` e `sha-<commit>`, mas os overlays não dependem de tags mutáveis: ambos fixam o digest OCI da imagem promovida. Assim, o conteúdo implantado não muda se uma tag for atualizada no registry. O digest pode corresponder ao commit imediatamente anterior ao `HEAD`, porque o commit de promoção também dispara um novo build. Tentar apontar automaticamente para esse novo digest criaria um ciclo de commits e builds; por isso, `main` é apenas uma referência conveniente e o overlay registra o artefato que já passou pela validação. O Dependabot acompanha semanalmente as dependências do `uv`, a imagem base e as actions usadas pelo pipeline.
+O pipeline publica `main` e `sha-<commit>`, mas os overlays não dependem de tags mutáveis: ambos fixam o digest OCI da imagem promovida. Depois da publicação, um job captura o digest retornado pelo BuildKit, atualiza os overlays, valida os recursos renderizados e abre ou atualiza um PR de promoção. O merge desse PR não publica outra imagem porque o job de publicação só reage a arquivos que alteram o runtime. Isso evita um ciclo de builds sem abrir mão da revisão da mudança Kubernetes. A tag `main` continua disponível por conveniência, enquanto o deploy usa o artefato imutável aprovado. O Dependabot acompanha semanalmente as dependências do `uv`, a imagem base e as actions usadas pelo pipeline.
 
 ## Kubernetes e Kustomize
 
@@ -51,13 +51,15 @@ Não incluí HPA porque não há teste de carga nem histórico de uso que susten
 
 ## Pipeline de CI/CD
 
-O workflow roda em pushes e pull requests para `main` e separa as permissões em três jobs.
+O workflow roda em pushes e pull requests para `main`, também aceita execução manual e separa as permissões por responsabilidade.
 
 O primeiro job instala Python 3.14 e uma versão fixada do `uv`, restaura o cache, sincroniza o ambiente pelo lockfile e executa os testes. Em seguida, o Ruff verifica lint e formatação, os dois overlays são renderizados e os recursos passam pelo kubeconform em modo estrito. O `pip-audit` recebe uma exportação temporária com hashes gerada a partir do `uv.lock`; ela não é versionada nem funciona como uma segunda lista de dependências.
 
 O segundo job constrói a imagem e inicia o contêiner com UID 10001, raiz somente leitura, nenhuma capability e `no-new-privileges`. O smoke test verifica os dois endpoints, a configuração recebida e a identidade efetiva do processo. Depois, o Trivy bloqueia vulnerabilidades corrigíveis de severidade `HIGH` ou `CRITICAL`.
 
-O terceiro job só roda em pushes e depois dos dois anteriores. É o único a receber `packages: write` e publica a imagem no GHCR. As permissões globais ficam limitadas à leitura do conteúdo, e o checkout não mantém as credenciais Git. Builds obsoletos da mesma referência são cancelados. O BuildKit também gera SBOM e provenance para registrar como o artefato foi produzido.
+Antes da publicação, um job identifica se o commit alterou a aplicação, o Dockerfile ou as dependências de runtime. O job de publicação só roda nesses casos, depois das duas validações, e é o único a receber `packages: write`. Builds obsoletos da mesma referência são cancelados. O BuildKit também gera SBOM e provenance para registrar como o artefato foi produzido.
+
+Depois da publicação, o job de promoção recebe permissão temporária para escrever conteúdo, abrir o PR e disparar a validação da branch. Ele usa o digest retornado pelo próprio build, atualiza `dev` e `prod`, renderiza os manifests e executa novamente o kubeconform antes de criar ou atualizar o PR `chore/promote-image-*`. Como esse job só existe em uma execução confiável da `main`, código vindo de pull requests não recebe permissões de escrita.
 
 A imagem é construída no job de teste e novamente no de publicação porque os jobs não compartilham o daemon Docker. Isso custa alguns segundos, reduzidos pelo cache, mas evita conceder permissão de publicação ao job que executa código da imagem e garante que nada seja enviado antes dos testes.
 

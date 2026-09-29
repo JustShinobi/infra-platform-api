@@ -76,3 +76,4 @@ O passo a passo para Kubernetes está em [DEPLOY.md](DEPLOY.md). O contexto das 
 - Repositório: <https://github.com/JustShinobi/infra-platform-api>
 - Imagem: `ghcr.io/justshinobi/infra-platform-api:main`
 - Os overlays `dev` e `prod` apontam para versões imutáveis da imagem por digest.
+- Uma nova imagem gera um PR de promoção com o digest atualizado nos dois overlays.

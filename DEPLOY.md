@@ -13,7 +13,7 @@ Você vai precisar de:
 - Traefik instalado e uma `IngressClass` chamada `traefik`;
 - acesso à imagem pública `ghcr.io/justshinobi/infra-platform-api`.
 
-O pipeline publica as tags `main` e `sha-<commit>`. Nos overlays, a imagem é fixada pelo digest, portanto uma alteração de tag no registry não muda o artefato implantado.
+Quando uma mudança em `app/`, no Dockerfile ou nas dependências de runtime chega à `main`, o pipeline publica as tags `main` e `sha-<commit>` e abre um PR para promover o digest gerado nos dois overlays. A imagem fica fixada pelo digest, portanto uma alteração de tag no registry não muda o artefato implantado.
 
 ## 1. Obter o projeto
 
@@ -84,7 +84,7 @@ kubectl apply -k .
 
 Inclua essa alteração no Git para manter o estado implantado rastreável.
 
-O digest promovido pode pertencer ao commit imediatamente anterior ao `HEAD`: o commit que atualiza o próprio digest também dispara o pipeline e produz uma nova imagem. Isso é esperado. Os overlays apontam para o artefato que já passou pela validação; a tag mutável `main` serve apenas como referência conveniente para a versão mais recente.
+O digest promovido identifica o commit que alterou a aplicação ou seu runtime. O merge do PR de promoção modifica apenas os overlays e, por isso, não publica outra imagem nem cria um ciclo de novos PRs. A tag mutável `main` serve como referência conveniente; o deploy continua usando o artefato imutável revisado no PR.
 
 Os ConfigMaps recebem um sufixo calculado pelo Kustomize. Quando seu conteúdo muda, a referência no Deployment também muda e o Kubernetes inicia um rollout automaticamente.
 
