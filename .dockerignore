@@ -1,0 +1,12 @@
+.git
+.github
+.gitignore
+tests
+k8s
+docs
+*.md
+Makefile
+rendered
+__pycache__
+*.pyc
+

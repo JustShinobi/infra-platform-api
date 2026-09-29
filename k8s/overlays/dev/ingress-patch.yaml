@@ -1,0 +1,17 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: infra-platform-api
+spec:
+  rules:
+    - host: infra-platform-dev.candidato.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: infra-platform-api
+                port:
+                  name: http
+
