@@ -233,6 +233,7 @@ jobs:
   publish:
     name: Publish container
     if: >-
+      github.ref == 'refs/heads/main' &&
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
       needs.detect-image-changes.outputs.image == 'true'
     runs-on: ubuntu-latest
@@ -303,7 +304,6 @@ jobs:
     timeout-minutes: 10
     needs: publish
     permissions:
-      actions: write
       contents: write
       pull-requests: write
     env:
@@ -424,5 +424,3 @@ jobs:
               --title "$title" \
               --body-file /tmp/promotion-pr.md
           fi
-
-          gh workflow run ci.yml --ref "$branch" -f publish_image=false
