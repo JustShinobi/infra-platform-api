@@ -7,7 +7,7 @@ Aplicação HTTP em Flask, servida por Gunicorn, empacotada em container e impla
 - `GET /healthz`: health check usado pelas probes do Kubernetes;
 - `GET /info`: versão, hostname do pod e valores injetados pelo ConfigMap;
 - testes unitários e testes dos endpoints pelo test client do Flask;
-- dependências fixadas com hashes e imagem multi-stage, enxuta e não-root;
+- dependências gerenciadas por `uv`, fixadas em lockfile e instaladas em imagem multi-stage, enxuta e não-root;
 - Kustomize com `base` e overlays `dev` e `prod`;
 - GitHub Actions para testar, auditar dependências e imagem, validar schemas, executar o container endurecido e publicar no GHCR;
 - documentação de implantação e relatório de decisões técnicas.
@@ -22,8 +22,8 @@ Aplicação HTTP em Flask, servida por Gunicorn, empacotada em container e impla
 │   ├── base/                # recursos Kubernetes reutilizáveis
 │   └── overlays/            # ambientes dev e prod
 ├── .github/workflows/ci.yml # pipeline de CI e publicação
-├── requirements.in         # dependências diretas
-├── requirements.lock       # árvore completa fixada com hashes
+├── pyproject.toml          # metadados e dependências diretas
+├── uv.lock                 # resolução completa e reproduzível
 ├── Dockerfile              # build multi-stage + Gunicorn
 ├── DEPLOY.md
 └── RELATORIO-TECNICO.md
@@ -31,13 +31,11 @@ Aplicação HTTP em Flask, servida por Gunicorn, empacotada em container e impla
 
 ## Execução local
 
-Pré-requisito: Python 3.10 ou superior.
+Pré-requisitos: Python 3.14 e `uv` 0.12.
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install --require-hashes -r requirements.lock
-APP_ENV=local APP_MESSAGE="hello from local" python3 -m app.main
+uv sync --frozen
+APP_ENV=local APP_MESSAGE="hello from local" uv run --frozen python -m app.main
 curl http://127.0.0.1:8080/healthz
 curl http://127.0.0.1:8080/info
 ```
@@ -52,6 +50,8 @@ make test
 ```
 
 Os testes usam o test client oficial do Flask e validam status, payload, headers, respostas de erro e leitura das variáveis de ambiente.
+
+Para alterar dependências, edite `pyproject.toml` e execute `uv lock`. Desenvolvimento, CI e build da imagem consomem o mesmo `uv.lock`; o ambiente de produção não contém `uv`, `pip` ou `setuptools`.
 
 ## Execução com Docker
 

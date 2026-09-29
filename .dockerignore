@@ -1,6 +1,8 @@
 .git
 .github
 .gitignore
+.venv
+.uv-cache
 tests
 k8s
 docs
@@ -9,4 +11,3 @@ Makefile
 rendered
 __pycache__
 *.pyc
-

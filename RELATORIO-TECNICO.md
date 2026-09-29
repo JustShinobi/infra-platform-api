@@ -10,11 +10,11 @@ A API expõe `/healthz` e `/info`. O segundo endpoint demonstra configuração e
 
 **Decisão:** Flask oferece roteamento, ciclo de resposta, test client e um caminho natural de evolução sem impor ORM, validação ou estrutura excessiva. A execução local pode usar o servidor de desenvolvimento, mas o container executa Gunicorn com um worker e quatro threads. Essa configuração oferece concorrência suficiente para o serviço leve sem desperdiçar memória dentro dos limites definidos no Kubernetes. O diretório temporário dos workers aponta para `/dev/shm`: o heartbeat permanece em memória e o processo é compatível com `readOnlyRootFilesystem` sem adicionar um volume gravável ao pod. O control socket do Gunicorn foi desabilitado porque não é usado pela operação do serviço e exigiria outro caminho gravável.
 
-**Trade-off:** Flask e Gunicorn introduzem dependências e aumentam um pouco a imagem e a superfície de atualização. Para compensar, versões diretas e transitivas são fixadas com hashes em `requirements.lock`. FastAPI seria vantajoso com schemas, validação de payload ou OpenAPI; não há esses requisitos neste projeto.
+**Trade-off:** Flask e Gunicorn introduzem dependências e aumentam um pouco a imagem e a superfície de atualização. Para compensar, versões diretas e transitivas são resolvidas e fixadas pelo `uv.lock`. FastAPI seria vantajoso com schemas, validação de payload ou OpenAPI; não há esses requisitos neste projeto.
 
 ## 3. Container
 
-A imagem usa `python:3.13-alpine` fixada por digest e build multi-stage. O primeiro estágio instala a árvore Flask/Gunicorn com `--require-hashes`; o estágio final recebe somente os pacotes instalados e a aplicação, remove `pip`, `setuptools`, `ensurepip` e dependências vendorizadas desnecessárias, e executa como UID/GID 10001. `.dockerignore` reduz o contexto de build. `PYTHONDONTWRITEBYTECODE` permite root filesystem somente leitura no Kubernetes. Um health check nativo também cobre a execução fora do Kubernetes. Dependabot verifica semanalmente dependências Python, imagem base e GitHub Actions para que a reprodutibilidade não congele correções.
+A imagem usa `python:3.14-alpine` fixada por digest e build multi-stage. O primeiro estágio copia uma versão do `uv` também fixada por digest e executa `uv sync --frozen --no-dev`, criando o ambiente virtual exclusivamente a partir de `pyproject.toml` e `uv.lock`. O estágio final recebe somente esse ambiente e a aplicação, remove `pip`, `setuptools`, `ensurepip` e dependências vendorizadas da imagem base, e executa como UID/GID 10001. Nem `uv` nem ferramentas de empacotamento permanecem no runtime. `.dockerignore` reduz o contexto de build. `PYTHONDONTWRITEBYTECODE` permite root filesystem somente leitura no Kubernetes. Um health check nativo também cobre a execução fora do Kubernetes. Dependabot verifica semanalmente o ecossistema `uv`, a imagem base e GitHub Actions para que a reprodutibilidade não congele correções.
 
 **Trade-off:** Alpine é pequena, mas usa musl. Isso pode dificultar extensões Python nativas; como a aplicação não possui dependências nativas, o benefício de tamanho prevalece. Em uma aplicação com NumPy, drivers ou wheels glibc, `python:slim` seria mais previsível.
 
@@ -35,7 +35,7 @@ Os overlays divergem de forma real:
 
 ## 5. CI/CD
 
-O workflow é acionado em push e pull request para `main` e separa três responsabilidades. O primeiro job restaura o cache do `pip`, instala e audita o lockfile com verificação de hashes, executa testes, checa sintaxe, renderiza os overlays e valida os recursos com kubeconform em modo estrito. O segundo constrói a imagem, inicia o container como UID 10001, filesystem somente leitura, sem capabilities e com `no-new-privileges`, valida `/healthz`, `/info`, configuração e identidade efetiva e bloqueia vulnerabilidades `HIGH` ou `CRITICAL` corrigíveis com Trivy. Apenas depois desses gates, e somente em push, o terceiro job autentica no GHCR e publica `main` e `sha-<commit>`.
+O workflow é acionado em push e pull request para `main` e separa três responsabilidades. O primeiro job configura Python 3.14 e uma versão fixada do `uv`, restaura seu cache, sincroniza o ambiente com `uv sync --frozen`, gera do `uv.lock` uma exportação temporária com hashes para o `pip-audit`, executa testes, checa sintaxe, renderiza os overlays e valida os recursos com kubeconform em modo estrito. Essa exportação não é versionada nem atua como segunda fonte de dependências. O segundo constrói a imagem, inicia o container como UID 10001, filesystem somente leitura, sem capabilities e com `no-new-privileges`, valida `/healthz`, `/info`, configuração e identidade efetiva e bloqueia vulnerabilidades `HIGH` ou `CRITICAL` corrigíveis com Trivy. Apenas depois desses gates, e somente em push, o terceiro job autentica no GHCR e publica `main` e `sha-<commit>`.
 
 Permissões são mínimas: leitura de conteúdo globalmente e `packages: write` apenas no job de publicação. O checkout não persiste credenciais Git. Concorrência cancela execuções obsoletas da mesma referência. SBOM e provenance são gerados pelo BuildKit para melhorar rastreabilidade da cadeia de suprimentos. Em pushes, a imagem publicada também é exportada como artefato com retenção de um dia. Todas as actions e a imagem do kubeconform são fixadas por SHA/digest; o Dependabot mantém essas referências atualizáveis por pull requests.
 
@@ -52,7 +52,7 @@ A validação final foi executada localmente, no GitHub Actions e em um cluster 
 ### Validação local e CI
 
 - 5/5 testes passaram pelo test client do Flask, cobrindo funções, endpoints, headers e erro 404 JSON;
-- oito dependências diretas/transitivas foram instaladas exclusivamente pelo lockfile com hashes;
+- oito dependências diretas/transitivas de runtime foram instaladas exclusivamente pelo `uv.lock`;
 - compilação de `app/` e `tests/` sem erros;
 - overlays `dev` e `prod` renderizados com Kustomize;
 - 13/13 recursos renderizados foram aceitos pelo kubeconform em modo estrito contra schemas Kubernetes 1.36;

@@ -1,12 +1,16 @@
 KUSTOMIZE ?= kubectl kustomize
+UV ?= uv
 
-.PHONY: install test render validate clean
+.PHONY: install lock test render validate clean
 
 install:
-	python3 -m pip install --require-hashes -r requirements.lock
+	$(UV) sync --frozen
+
+lock:
+	$(UV) lock
 
 test:
-	python3 -m unittest discover -s tests -v
+	$(UV) run --frozen python -m unittest discover -s tests -v
 
 render:
 	mkdir -p rendered
@@ -14,7 +18,7 @@ render:
 	$(KUSTOMIZE) k8s/overlays/prod > rendered/prod.yaml
 
 validate: test render
-	python3 -m compileall -q app tests
+	$(UV) run --frozen python -m compileall -q app tests
 
 clean:
 	rm -rf rendered app/__pycache__ tests/__pycache__

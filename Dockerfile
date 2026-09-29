@@ -1,12 +1,16 @@
+FROM ghcr.io/astral-sh/uv:0.12.20@sha256:100047e74f30778ab704942321a09750d6158739573ff58bf3924085cc6cd2d8 AS uv
+
 FROM python:3.14-alpine@sha256:9e9fde4d32eedce0b661d9ab91e826b62dddf28e928c230ec55f1866cac66b01 AS dependencies
 
-COPY requirements.lock /tmp/requirements.lock
-RUN python -m pip install \
-      --disable-pip-version-check \
-      --no-cache-dir \
-      --require-hashes \
-      --prefix=/install \
-      -r /tmp/requirements.lock
+ENV UV_LINK_MODE=copy \
+    UV_PYTHON_DOWNLOADS=never
+
+WORKDIR /app
+COPY --from=uv /uv /uvx /bin/
+COPY pyproject.toml uv.lock ./
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv lock --check \
+    && uv sync --frozen --no-dev --no-install-project
 
 FROM python:3.14-alpine@sha256:9e9fde4d32eedce0b661d9ab91e826b62dddf28e928c230ec55f1866cac66b01 AS runtime
 
@@ -16,29 +20,31 @@ ENV APP_VERSION=${APP_VERSION} \
     PYTHONUNBUFFERED=1 \
     PORT=8080
 
-WORKDIR /app
-COPY --from=dependencies /install /usr/local
-COPY --chown=10001:10001 app/ /app/app/
-
 # Package managers and build tooling are unnecessary at runtime. Resolve their
 # locations dynamically so Python minor-version updates cannot bypass cleanup.
 RUN set -eux; \
-    stdlib="$(python -c 'import sysconfig; print(sysconfig.get_path("stdlib"))')"; \
-    purelib="$(python -c 'import sysconfig; print(sysconfig.get_path("purelib"))')"; \
+    stdlib="$(/usr/local/bin/python -c 'import sysconfig; print(sysconfig.get_path("stdlib"))')"; \
+    purelib="$(/usr/local/bin/python -c 'import sysconfig; print(sysconfig.get_path("purelib"))')"; \
     rm -rf \
       "${stdlib}/ensurepip" \
       "${purelib}/_distutils_hack" \
       "${purelib}"/pip* \
       "${purelib}"/setuptools*; \
     rm -f /usr/local/bin/pip*; \
-    if python -c 'import pip' 2>/dev/null; then \
+    if /usr/local/bin/python -c 'import pip' 2>/dev/null; then \
       echo 'pip must not be present in the runtime image' >&2; \
       exit 1; \
     fi; \
-    if python -c 'import setuptools' 2>/dev/null; then \
+    if /usr/local/bin/python -c 'import setuptools' 2>/dev/null; then \
       echo 'setuptools must not be present in the runtime image' >&2; \
       exit 1; \
     fi
+
+WORKDIR /app
+COPY --from=dependencies /app/.venv /app/.venv
+COPY --chown=10001:10001 app/ /app/app/
+
+ENV PATH="/app/.venv/bin:${PATH}"
 
 USER 10001:10001
 EXPOSE 8080
