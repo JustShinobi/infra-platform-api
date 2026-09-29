@@ -15,4 +15,4 @@ patches:
   - path: deployment-patch.yaml
 images:
   - name: ghcr.io/justshinobi/infra-platform-api
-    digest: sha256:6190134a9d3983823222a4594269e519be2f3d259794d5c71fd779a9db282e76
+    digest: sha256:332947faca13b91bdc8c3b000ceba2f69491e1bb7af8ed128cd02024de685f64
