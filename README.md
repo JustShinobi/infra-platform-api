@@ -46,9 +46,10 @@ Esse comando usa o servidor de desenvolvimento do Flask. A imagem de contêiner 
 ```bash
 make install
 make test
+make lint
 ```
 
-Os testes usam o cliente de testes do Flask para verificar status, payloads, cabeçalhos, respostas de erro e leitura das variáveis de ambiente.
+Os testes usam o cliente de testes do Flask para verificar status, payloads, cabeçalhos, respostas de erro e leitura das variáveis de ambiente. O Ruff valida lint e formatação com `make lint`; para aplicar correções locais, use `make format`.
 
 Para alterar uma dependência, edite `pyproject.toml` e execute `uv lock`. O arquivo `uv.lock` é a fonte usada em todos os ambientes; a imagem final não leva `uv`, `pip` ou `setuptools`.
 

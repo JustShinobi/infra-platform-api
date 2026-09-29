@@ -9,7 +9,6 @@ from typing import Any
 
 from flask import Flask, Response, jsonify
 
-
 APP_NAME = "infra-platform-api"
 
 
@@ -54,6 +53,10 @@ def create_app() -> Flask:
     @application.errorhandler(HTTPStatus.NOT_FOUND)
     def not_found(_error: Any) -> tuple[Response, int]:
         return jsonify({"error": "not found"}), HTTPStatus.NOT_FOUND
+
+    @application.errorhandler(HTTPStatus.METHOD_NOT_ALLOWED)
+    def method_not_allowed(_error: Any) -> tuple[Response, int]:
+        return jsonify({"error": "method not allowed"}), HTTPStatus.METHOD_NOT_ALLOWED
 
     return application
 

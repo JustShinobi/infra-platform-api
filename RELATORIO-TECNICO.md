@@ -45,7 +45,7 @@ A base reúne Deployment, Service ClusterIP, ConfigMap, Ingress e ServiceAccount
 
 O pod segue os controles do Pod Security Standard `restricted`: roda como usuário não-root, usa o perfil seccomp padrão, bloqueia elevação de privilégio, remove todas as capabilities e mantém o sistema de arquivos raiz somente leitura. O token do ServiceAccount não é montado porque a aplicação não acessa a API do Kubernetes.
 
-Readiness e liveness consultam `/healthz` com temporizações diferentes. Requests orientam o agendamento e limits impedem consumo sem controle. Durante uma atualização, `maxUnavailable: 0` mantém a instância atual disponível até que a nova esteja pronta.
+Readiness e liveness consultam `/healthz` com temporizações diferentes. Requests orientam o agendamento e limits impedem consumo sem controle. Durante uma atualização, `maxUnavailable: 0` mantém a instância atual disponível até que a nova esteja pronta. Os ConfigMaps gerados pelo Kustomize recebem um hash no nome; uma alteração de configuração atualiza a referência no pod e inicia o rollout sem intervenção manual.
 
 Não incluí HPA porque não há teste de carga nem histórico de uso que sustente um limite de escala. Sem esses dados, qualquer valor seria um chute e poderia escalar cedo ou tarde demais. A NetworkPolicy também ficou fora da base: sua configuração depende do CNI, do Ingress Controller e dos fluxos permitidos no cluster de destino. Uma política genérica poderia bloquear as probes ou o tráfego do Ingress. Com esses fluxos conhecidos, ela pode ser adicionada sem esse risco.
 
@@ -53,7 +53,7 @@ Não incluí HPA porque não há teste de carga nem histórico de uso que susten
 
 O workflow roda em pushes e pull requests para `main` e separa as permissões em três jobs.
 
-O primeiro job instala Python 3.14 e uma versão fixada do `uv`, restaura o cache, sincroniza o ambiente pelo lockfile e executa os testes. Em seguida, verifica a sintaxe, renderiza os dois overlays e valida os recursos com kubeconform em modo estrito. O `pip-audit` recebe uma exportação temporária com hashes gerada a partir do `uv.lock`; ela não é versionada nem funciona como uma segunda lista de dependências.
+O primeiro job instala Python 3.14 e uma versão fixada do `uv`, restaura o cache, sincroniza o ambiente pelo lockfile e executa os testes. Em seguida, o Ruff verifica lint e formatação, os dois overlays são renderizados e os recursos passam pelo kubeconform em modo estrito. O `pip-audit` recebe uma exportação temporária com hashes gerada a partir do `uv.lock`; ela não é versionada nem funciona como uma segunda lista de dependências.
 
 O segundo job constrói a imagem e inicia o contêiner com UID 10001, raiz somente leitura, nenhuma capability e `no-new-privileges`. O smoke test verifica os dois endpoints, a configuração recebida e a identidade efetiva do processo. Depois, o Trivy bloqueia vulnerabilidades corrigíveis de severidade `HIGH` ou `CRITICAL`.
 
@@ -73,9 +73,9 @@ A validação foi feita em três níveis: ambiente local, GitHub Actions e clust
 
 ### Código, manifestos e imagem
 
-- Os cinco testes da aplicação passaram, cobrindo funções, endpoints, cabeçalhos e erro 404 em JSON.
+- Os sete testes da aplicação passaram, cobrindo funções, valores padrão, endpoints, cabeçalhos e erros 404 e 405 em JSON.
 - As oito dependências diretas e transitivas de runtime foram instaladas pelo `uv.lock`.
-- `app/` e `tests/` foram compilados sem erros.
+- O Ruff não encontrou problemas de lint ou formatação em `app/` e `tests/`.
 - Os overlays `dev` e `prod` foram renderizados com Kustomize.
 - Os 13 recursos renderizados passaram pelo kubeconform em modo estrito com os schemas do Kubernetes 1.36.
 - O contêiner respondeu corretamente aos endpoints sob as mesmas restrições essenciais usadas no pod.

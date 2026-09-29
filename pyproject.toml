@@ -12,7 +12,14 @@ dependencies = [
 [dependency-groups]
 dev = [
   "pip-audit==2.10.1",
+  "ruff==0.16.9",
 ]
 
 [tool.uv]
 package = false
+
+[tool.ruff]
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["B", "E4", "E7", "E9", "F", "I", "UP"]

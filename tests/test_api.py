@@ -27,6 +27,14 @@ class PayloadTests(unittest.TestCase):
         self.assertEqual(payload["message"], "configured by test")
         self.assertTrue(payload["hostname"])
 
+    def test_info_payload_uses_local_defaults(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            payload = info_payload()
+
+        self.assertEqual(payload["version"], "dev")
+        self.assertEqual(payload["environment"], "local")
+        self.assertEqual(payload["message"], "running locally")
+
 
 class EndpointTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -38,6 +46,7 @@ class EndpointTests(unittest.TestCase):
         response = self.client.get("/healthz")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json(), {"status": "ok"})
+        self.assertEqual(response.content_type, "application/json")
         self.assertEqual(response.headers["Cache-Control"], "no-store")
         self.assertEqual(
             response.headers["Content-Security-Policy"],
@@ -60,6 +69,13 @@ class EndpointTests(unittest.TestCase):
         response = self.client.get("/unknown")
         self.assertEqual(response.status_code, 404)
         self.assertEqual(response.get_json(), {"error": "not found"})
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
+
+    def test_unsupported_method_returns_json(self) -> None:
+        response = self.client.post("/healthz")
+        self.assertEqual(response.status_code, 405)
+        self.assertEqual(response.get_json(), {"error": "method not allowed"})
+        self.assertEqual(response.content_type, "application/json")
 
 
 if __name__ == "__main__":

@@ -56,8 +56,10 @@ jobs:
       - name: Run unit and endpoint tests
         run: uv run --frozen python -m unittest discover -s tests -v
 
-      - name: Check Python syntax
-        run: uv run --frozen python -m compileall -q app tests
+      - name: Lint and check Python formatting
+        run: |
+          uv run --frozen ruff check app tests
+          uv run --frozen ruff format --check app tests
 
       - name: Set up kubectl
         uses: azure/setup-kubectl@829323503d1be3d00ca8346e5391ca0b07a9ab0d # v5.1.0

@@ -73,6 +73,8 @@ kubectl apply -k .
 
 Inclua essa alteração no Git para manter o estado implantado rastreável.
 
+Os ConfigMaps recebem um sufixo calculado pelo Kustomize. Quando seu conteúdo muda, a referência no Deployment também muda e o Kubernetes inicia um rollout automaticamente.
+
 ## 5. Usar outro Ingress Controller ou domínio
 
 Crie um patch no overlay para alterar `spec.ingressClassName` e `spec.rules[].host`. Assim, a base continua compartilhada e não precisa ser copiada. O patch do overlay `dev` serve como referência.
