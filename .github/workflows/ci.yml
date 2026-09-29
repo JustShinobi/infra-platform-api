@@ -96,6 +96,16 @@ jobs:
         env:
           EXPECTED_VERSION: ${{ github.sha }}
         run: |
+          docker run --rm \
+            --read-only \
+            --user 10001:10001 \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --volume "$PWD/tests:/app/tests:ro" \
+            --entrypoint python \
+            infra-platform-api:ci \
+            -m unittest discover -s tests -v
+
           docker run --detach --name infra-platform-api-ci \
             --read-only \
             --user 10001:10001 \
@@ -137,6 +147,16 @@ jobs:
 
           test "$(docker inspect --format '{{.Config.User}}' infra-platform-api-ci)" = '10001:10001'
           test "$(docker inspect --format '{{.State.Running}}' infra-platform-api-ci)" = 'true'
+
+          if docker exec infra-platform-api-ci python -c 'import pip' 2>/dev/null; then
+            echo 'pip must not be importable in the runtime image' >&2
+            exit 1
+          fi
+
+          if docker exec infra-platform-api-ci python -c 'import setuptools' 2>/dev/null; then
+            echo 'setuptools must not be importable in the runtime image' >&2
+            exit 1
+          fi
 
       - name: Scan container for fixable vulnerabilities
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0

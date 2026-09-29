@@ -20,14 +20,25 @@ WORKDIR /app
 COPY --from=dependencies /install /usr/local
 COPY --chown=10001:10001 app/ /app/app/
 
-# Package managers and build tooling are unnecessary at runtime. Removing them
-# reduces the attack surface and excludes their vendored dependencies.
-RUN rm -rf \
-      /usr/local/lib/python3.13/ensurepip \
-      /usr/local/lib/python3.13/site-packages/_distutils_hack \
-      /usr/local/lib/python3.13/site-packages/pip* \
-      /usr/local/lib/python3.13/site-packages/setuptools* \
-    && rm -f /usr/local/bin/pip*
+# Package managers and build tooling are unnecessary at runtime. Resolve their
+# locations dynamically so Python minor-version updates cannot bypass cleanup.
+RUN set -eux; \
+    stdlib="$(python -c 'import sysconfig; print(sysconfig.get_path("stdlib"))')"; \
+    purelib="$(python -c 'import sysconfig; print(sysconfig.get_path("purelib"))')"; \
+    rm -rf \
+      "${stdlib}/ensurepip" \
+      "${purelib}/_distutils_hack" \
+      "${purelib}"/pip* \
+      "${purelib}"/setuptools*; \
+    rm -f /usr/local/bin/pip*; \
+    if python -c 'import pip' 2>/dev/null; then \
+      echo 'pip must not be present in the runtime image' >&2; \
+      exit 1; \
+    fi; \
+    if python -c 'import setuptools' 2>/dev/null; then \
+      echo 'setuptools must not be present in the runtime image' >&2; \
+      exit 1; \
+    fi
 
 USER 10001:10001
 EXPOSE 8080
