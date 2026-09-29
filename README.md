@@ -1,65 +1,64 @@
 # Infra Platform API
 
-Aplicação HTTP em Flask, servida por Gunicorn, empacotada em container e implantável com Kustomize. O projeto mantém a camada de aplicação pequena, enquanto Kubernetes, segurança e CI/CD recebem o foco principal.
+Este projeto reúne uma API pequena em Flask e a infraestrutura necessária para executá-la em Kubernetes. A regra de negócio é propositalmente curta: o foco está no empacotamento, na segurança, no processo de implantação e na automação do pipeline.
 
-## O que está incluído
+## Visão geral
 
-- `GET /healthz`: health check usado pelas probes do Kubernetes;
-- `GET /info`: versão, hostname do pod e valores injetados pelo ConfigMap;
-- testes unitários e testes dos endpoints pelo test client do Flask;
-- dependências gerenciadas por `uv`, fixadas em lockfile e instaladas em imagem multi-stage, enxuta e não-root;
-- Kustomize com `base` e overlays `dev` e `prod`;
-- GitHub Actions para testar, auditar dependências e imagem, validar schemas, executar o container endurecido e publicar no GHCR;
-- documentação de implantação e relatório de decisões técnicas.
+- `GET /healthz` informa se a aplicação está pronta para receber tráfego.
+- `GET /info` retorna a versão, o hostname do pod e os valores recebidos pelo ConfigMap.
+- Os testes cobrem as funções e o comportamento HTTP da API.
+- O `uv.lock` mantém as dependências reproduzíveis no desenvolvimento, no CI e na construção da imagem.
+- A configuração do Kubernetes usa uma base comum e overlays para `dev` e `prod`.
+- O GitHub Actions testa o código, valida os manifestos, verifica vulnerabilidades e publica a imagem no GHCR.
 
-## Estrutura
+## Estrutura do repositório
 
 ```text
 .
-├── app/                     # API Python
-├── tests/                   # testes unitários e HTTP
+├── app/                     # aplicação Flask
+├── tests/                   # testes unitários e dos endpoints
 ├── k8s/
-│   ├── base/                # recursos Kubernetes reutilizáveis
-│   └── overlays/            # ambientes dev e prod
+│   ├── base/                # recursos compartilhados
+│   └── overlays/            # configurações de dev e prod
 ├── .github/workflows/ci.yml # pipeline de CI e publicação
-├── pyproject.toml          # metadados e dependências diretas
-├── uv.lock                 # resolução completa e reproduzível
-├── Dockerfile              # build multi-stage + Gunicorn
+├── pyproject.toml           # metadados e dependências diretas
+├── uv.lock                  # resolução completa das dependências
+├── Dockerfile               # construção da imagem e execução com Gunicorn
 ├── DEPLOY.md
 └── RELATORIO-TECNICO.md
 ```
 
-## Execução local
+## Rodando localmente
 
-Pré-requisitos: Python 3.14 e `uv` 0.12.
+É necessário ter Python 3.14 e `uv` 0.12 instalados.
 
 ```bash
 uv sync --frozen
-APP_ENV=local APP_MESSAGE="hello from local" uv run --frozen python -m app.main
+APP_ENV=local APP_MESSAGE="execução local" uv run --frozen python -m app.main
 curl http://127.0.0.1:8080/healthz
 curl http://127.0.0.1:8080/info
 ```
 
-`python -m app.main` usa o servidor de desenvolvimento apenas para execução local. A imagem sempre inicia a aplicação com Gunicorn.
+Esse comando usa o servidor de desenvolvimento do Flask. A imagem de contêiner inicia a aplicação com Gunicorn.
 
-## Testes
+## Instalando e testando
 
 ```bash
 make install
 make test
 ```
 
-Os testes usam o test client oficial do Flask e validam status, payload, headers, respostas de erro e leitura das variáveis de ambiente.
+Os testes usam o cliente de testes do Flask para verificar status, payloads, cabeçalhos, respostas de erro e leitura das variáveis de ambiente.
 
-Para alterar dependências, edite `pyproject.toml` e execute `uv lock`. Desenvolvimento, CI e build da imagem consomem o mesmo `uv.lock`; o ambiente de produção não contém `uv`, `pip` ou `setuptools`.
+Para alterar uma dependência, edite `pyproject.toml` e execute `uv lock`. O arquivo `uv.lock` é a fonte usada em todos os ambientes; a imagem final não leva `uv`, `pip` ou `setuptools`.
 
-## Execução com Docker
+## Rodando com Docker
 
 ```bash
 docker build --build-arg APP_VERSION=local -t infra-platform-api:local .
 docker run --rm -p 8080:8080 \
   -e APP_ENV=docker \
-  -e APP_MESSAGE="hello from Docker" \
+  -e APP_MESSAGE="execução via Docker" \
   infra-platform-api:local
 ```
 
@@ -69,10 +68,10 @@ Em outro terminal:
 curl http://127.0.0.1:8080/info
 ```
 
-As instruções completas para Kubernetes estão em [DEPLOY.md](DEPLOY.md), e as decisões e trade-offs em [RELATORIO-TECNICO.md](RELATORIO-TECNICO.md).
+O passo a passo para Kubernetes está em [DEPLOY.md](DEPLOY.md). O contexto das escolhas técnicas e os limites da solução estão em [RELATORIO-TECNICO.md](RELATORIO-TECNICO.md).
 
 ## Artefatos públicos
 
-- repositório: <https://github.com/JustShinobi/infra-platform-api>;
-- imagem: `ghcr.io/justshinobi/infra-platform-api:main`;
-- versões implantáveis fixadas por digest nos overlays `dev` e `prod`.
+- Repositório: <https://github.com/JustShinobi/infra-platform-api>
+- Imagem: `ghcr.io/justshinobi/infra-platform-api:main`
+- Os overlays `dev` e `prod` apontam para versões imutáveis da imagem por digest.

@@ -7,7 +7,7 @@ metadata:
 spec:
   ingressClassName: traefik
   rules:
-    - host: infra-platform.candidato.local
+    - host: infra-platform-api.local
       http:
         paths:
           - path: /
@@ -17,4 +17,3 @@ spec:
                 name: infra-platform-api
                 port:
                   name: http
-

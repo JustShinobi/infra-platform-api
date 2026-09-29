@@ -1,7 +1,7 @@
 [project]
 name = "infra-platform-api"
 version = "0.1.0"
-description = "Small Flask API packaged for a hardened Kubernetes runtime"
+description = "API Flask enxuta para execução segura em Kubernetes"
 readme = "README.md"
 requires-python = ">=3.14,<3.15"
 dependencies = [

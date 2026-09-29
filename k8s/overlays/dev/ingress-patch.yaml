@@ -4,7 +4,7 @@ metadata:
   name: infra-platform-api
 spec:
   rules:
-    - host: infra-platform-dev.candidato.local
+    - host: infra-platform-api-dev.local
       http:
         paths:
           - path: /
@@ -14,4 +14,3 @@ spec:
                 name: infra-platform-api
                 port:
                   name: http
-

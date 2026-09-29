@@ -9,7 +9,7 @@ configMapGenerator:
     behavior: merge
     literals:
       - APP_ENV=development
-      - APP_MESSAGE=hello from the development overlay
+      - APP_MESSAGE=configuração do ambiente de desenvolvimento carregada
 patches:
   - path: deployment-patch.yaml
   - path: ingress-patch.yaml

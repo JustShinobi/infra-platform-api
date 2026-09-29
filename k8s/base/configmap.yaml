@@ -4,5 +4,4 @@ metadata:
   name: infra-platform-api-config
 data:
   APP_ENV: base
-  APP_MESSAGE: configured by the base ConfigMap
-
+  APP_MESSAGE: configuração padrão carregada

@@ -1,103 +1,121 @@
 # Relatório técnico — Infra Platform API
 
-## 1. Resumo da solução
+## Visão geral
 
-Foi construída uma API HTTP em Python, uma imagem de container endurecida, manifests Kubernetes reutilizáveis com Kustomize e um pipeline GitHub Actions. A solução atende aos endpoints, ConfigMap, Deployment, Service, Ingress, probes, recursos, overlays, testes, build e publicação solicitados. A validação adicional em k3s é registrada como evidência operacional sem versionar detalhes específicos do laboratório.
+O projeto tem quatro partes: a API em Flask, a imagem de contêiner, os manifestos Kubernetes organizados com Kustomize e o pipeline no GitHub Actions. Mantive a aplicação pequena para que as decisões de infraestrutura ficassem fáceis de localizar e testar.
 
-## 2. Aplicação
+Além da validação local e do pipeline, implantei a imagem publicada em um cluster k3s. Essa etapa ajudou a verificar os controles do contêiner em condições reais e revelou um ajuste necessário no Gunicorn, descrito mais adiante.
 
-A API expõe `/healthz` e `/info`. O segundo endpoint demonstra configuração externa por meio de `APP_ENV` e `APP_MESSAGE`, além de expor versão e hostname. A aplicação usa Flask 3.1 com application factory; isso mantém criação e testes isolados e evita acoplamento de configuração. O handler 404 também responde JSON, preservando o contrato de API.
+## Aplicação
 
-**Decisão:** Flask oferece roteamento, ciclo de resposta, test client e um caminho natural de evolução sem impor ORM, validação ou estrutura excessiva. A execução local pode usar o servidor de desenvolvimento, mas o container executa Gunicorn com um worker e quatro threads. Essa configuração oferece concorrência suficiente para o serviço leve sem desperdiçar memória dentro dos limites definidos no Kubernetes. O diretório temporário dos workers aponta para `/dev/shm`: o heartbeat permanece em memória e o processo é compatível com `readOnlyRootFilesystem` sem adicionar um volume gravável ao pod. O control socket do Gunicorn foi desabilitado porque não é usado pela operação do serviço e exigiria outro caminho gravável.
+A API expõe dois endpoints:
 
-**Trade-off:** Flask e Gunicorn introduzem dependências e aumentam um pouco a imagem e a superfície de atualização. Para compensar, versões diretas e transitivas são resolvidas e fixadas pelo `uv.lock`. FastAPI seria vantajoso com schemas, validação de payload ou OpenAPI; não há esses requisitos neste projeto.
+- `/healthz` responde ao health check usado pelas probes do Kubernetes;
+- `/info` mostra versão, ambiente, mensagem configurada e hostname do pod.
 
-## 3. Container
+Escolhi Flask porque ele oferece o necessário para este serviço — roteamento, tratamento de respostas e um bom cliente de testes — sem trazer componentes que não seriam usados. A application factory deixa a criação da aplicação isolada e facilita os testes. Respostas 404 também usam JSON, mantendo o mesmo formato da API.
 
-A imagem usa `python:3.14-alpine` fixada por digest e build multi-stage. O primeiro estágio copia uma versão do `uv` também fixada por digest e executa `uv sync --frozen --no-dev`, criando o ambiente virtual exclusivamente a partir de `pyproject.toml` e `uv.lock`. O estágio final recebe somente esse ambiente e a aplicação, remove `pip`, `setuptools`, `ensurepip` e dependências vendorizadas da imagem base, e executa como UID/GID 10001. Nem `uv` nem ferramentas de empacotamento permanecem no runtime. `.dockerignore` reduz o contexto de build. `PYTHONDONTWRITEBYTECODE` permite root filesystem somente leitura no Kubernetes. Um health check nativo também cobre a execução fora do Kubernetes. Dependabot verifica semanalmente o ecossistema `uv`, a imagem base e GitHub Actions para que a reprodutibilidade não congele correções.
+No contêiner, a aplicação roda com Gunicorn em um worker e quatro threads. É uma configuração suficiente para este serviço leve e cabe com folga nos limites definidos nos manifestos. O heartbeat do Gunicorn usa `/dev/shm`, e o control socket foi desabilitado. Com isso, o processo funciona com o sistema de arquivos raiz somente leitura, sem precisar abrir mais um volume gravável no pod.
 
-**Trade-off:** Alpine é pequena, mas usa musl. Isso pode dificultar extensões Python nativas; como a aplicação não possui dependências nativas, o benefício de tamanho prevalece. Em uma aplicação com NumPy, drivers ou wheels glibc, `python:slim` seria mais previsível.
+Flask e Gunicorn acrescentam dependências quando comparados a um servidor feito apenas com a biblioteca padrão. Aqui, a troca vale a pena pela clareza e pelo comportamento de produção. FastAPI faria mais sentido se houvesse payloads com schemas, validação de dados ou documentação OpenAPI, requisitos que não existem nesta API.
 
-A tag `main` é conveniente para desenvolvimento; cada build também recebe uma tag `sha-<commit>`. Como tags podem ser reassociadas no registry, o overlay de produção vai além e fixa o digest OCI do build promovido. O build recebe o SHA completo em `APP_VERSION`, permitindo confirmar pelo endpoint qual código originou o artefato em execução.
+## Imagem de contêiner
 
-## 4. Kubernetes e Kustomize
+O Dockerfile usa `python:3.14-alpine` fixado por digest e separa construção e execução em dois estágios. O primeiro estágio copia uma versão também fixada do `uv` e instala as dependências com `uv sync --frozen --no-dev`. O segundo recebe apenas o ambiente virtual e o código da aplicação.
 
-A base contém Deployment, Service ClusterIP, ConfigMap, Ingress e ServiceAccount. O pod aplica controles compatíveis com o Pod Security Standard `restricted`: usuário não-root, seccomp padrão, sem elevação de privilégio, sem capabilities e filesystem somente leitura. O token da ServiceAccount não é montado, porque a aplicação não acessa a API do Kubernetes.
+A imagem final:
 
-Readiness e liveness usam `/healthz`, com temporizações diferentes. Requests ajudam o scheduler; limits protegem o nó. O rollout impede indisponibilidade (`maxUnavailable: 0`) e mantém somente três revisões.
+- executa como UID e GID 10001;
+- não contém `uv`, `pip` ou `setuptools`;
+- não grava arquivos `.pyc`;
+- inclui um health check para uso fora do Kubernetes;
+- recebe o SHA do commit em `APP_VERSION`;
+- tem aproximadamente 17,7 MiB no formato comprimido publicado no GHCR.
 
-Os overlays divergem de forma real:
+O Alpine foi uma escolha adequada porque as dependências atuais não exigem extensões nativas. A principal ressalva é o uso de musl: se o projeto passasse a depender de bibliotecas como NumPy ou de drivers distribuídos apenas para glibc, uma base `python:slim` seria mais previsível, mesmo com uma imagem maior.
 
-- `dev`: namespace próprio, ConfigMap, hostname, recursos menores e imagem fixada por digest;
-- `prod`: duas réplicas, recursos maiores, ConfigMap, distribuição entre nós, PodDisruptionBudget e imagem fixada por digest.
+O pipeline publica `main` e `sha-<commit>`, mas os overlays não dependem de tags mutáveis: ambos fixam o digest OCI da imagem promovida. Assim, o conteúdo implantado não muda se uma tag for atualizada no registry. O Dependabot acompanha semanalmente as dependências do `uv`, a imagem base e as actions usadas pelo pipeline.
 
-**Decisão:** não foi adicionado HPA. Uma API quase ociosa e sem teste de carga não fornece base para limiares úteis; HPA aqui seria configuração ornamental. Da mesma forma, NetworkPolicy foi evitada na base porque seu comportamento depende do CNI e poderia quebrar probes/Ingress em clusters do avaliador. O isolamento de namespace e o PSS entregam proteção portátil; uma política de rede deve ser adicionada quando o CNI e os fluxos forem conhecidos.
+## Kubernetes e Kustomize
 
-## 5. CI/CD
+A base reúne Deployment, Service ClusterIP, ConfigMap, Ingress e ServiceAccount. Os overlays alteram apenas o que varia entre ambientes:
 
-O workflow é acionado em push e pull request para `main` e separa três responsabilidades. O primeiro job configura Python 3.14 e uma versão fixada do `uv`, restaura seu cache, sincroniza o ambiente com `uv sync --frozen`, gera do `uv.lock` uma exportação temporária com hashes para o `pip-audit`, executa testes, checa sintaxe, renderiza os overlays e valida os recursos com kubeconform em modo estrito. Essa exportação não é versionada nem atua como segunda fonte de dependências. O segundo constrói a imagem, inicia o container como UID 10001, filesystem somente leitura, sem capabilities e com `no-new-privileges`, valida `/healthz`, `/info`, configuração e identidade efetiva e bloqueia vulnerabilidades `HIGH` ou `CRITICAL` corrigíveis com Trivy. Apenas depois desses gates, e somente em push, o terceiro job autentica no GHCR e publica `main` e `sha-<commit>`.
+- `dev` usa uma réplica, recursos menores, namespace e host próprios;
+- `prod` usa duas réplicas, mais recursos, distribuição entre nós e PodDisruptionBudget.
 
-Permissões são mínimas: leitura de conteúdo globalmente e `packages: write` apenas no job de publicação. O checkout não persiste credenciais Git. Concorrência cancela execuções obsoletas da mesma referência. SBOM e provenance são gerados pelo BuildKit para melhorar rastreabilidade da cadeia de suprimentos. Em pushes, a imagem publicada também é exportada como artefato com retenção de um dia. Todas as actions e a imagem do kubeconform são fixadas por SHA/digest; o Dependabot mantém essas referências atualizáveis por pull requests.
+O pod segue os controles do Pod Security Standard `restricted`: roda como usuário não-root, usa o perfil seccomp padrão, bloqueia elevação de privilégio, remove todas as capabilities e mantém o sistema de arquivos raiz somente leitura. O token do ServiceAccount não é montado porque a aplicação não acessa a API do Kubernetes.
 
-**Trade-off:** a imagem é construída duas vezes, uma para o teste de runtime e outra para publicação, porque jobs não compartilham o daemon Docker. O cache do GitHub reduz o custo, enquanto a separação mantém permissões de escrita fora do job que executa o container e impede publicar algo antes do teste. Para este projeto pequeno, segurança e clareza compensam os segundos adicionais.
+Readiness e liveness consultam `/healthz` com temporizações diferentes. Requests orientam o agendamento e limits impedem consumo sem controle. Durante uma atualização, `maxUnavailable: 0` mantém a instância atual disponível até que a nova esteja pronta.
 
-## 6. Observabilidade e operação
+Não incluí HPA porque não há teste de carga nem histórico de uso que sustente um limite de escala. Sem esses dados, qualquer valor seria um chute e poderia escalar cedo ou tarde demais. A NetworkPolicy também ficou fora da base: sua configuração depende do CNI, do Ingress Controller e dos fluxos permitidos no cluster de destino. Uma política genérica poderia bloquear as probes ou o tráfego do Ingress. Com esses fluxos conhecidos, ela pode ser adicionada sem esse risco.
 
-Os logs de acesso e lifecycle do Gunicorn são enviados para stdout/stderr, adequados ao coletor do cluster. Health check, versão, ambiente e hostname simplificam diagnóstico. Não foram adicionados Prometheus, tracing ou dashboards: para este serviço, isso ultrapassaria o escopo; em produção, logs JSON e métricas de latência, taxa de erros e saturação seriam o próximo passo.
+## Pipeline de CI/CD
 
-## 7. Validação executada
+O workflow roda em pushes e pull requests para `main` e separa as permissões em três jobs.
 
-A validação final foi executada localmente, no GitHub Actions e em um cluster k3s real.
+O primeiro job instala Python 3.14 e uma versão fixada do `uv`, restaura o cache, sincroniza o ambiente pelo lockfile e executa os testes. Em seguida, verifica a sintaxe, renderiza os dois overlays e valida os recursos com kubeconform em modo estrito. O `pip-audit` recebe uma exportação temporária com hashes gerada a partir do `uv.lock`; ela não é versionada nem funciona como uma segunda lista de dependências.
 
-### Validação local e CI
+O segundo job constrói a imagem e inicia o contêiner com UID 10001, raiz somente leitura, nenhuma capability e `no-new-privileges`. O smoke test verifica os dois endpoints, a configuração recebida e a identidade efetiva do processo. Depois, o Trivy bloqueia vulnerabilidades corrigíveis de severidade `HIGH` ou `CRITICAL`.
 
-- 5/5 testes passaram pelo test client do Flask, cobrindo funções, endpoints, headers e erro 404 JSON;
-- oito dependências diretas/transitivas de runtime foram instaladas exclusivamente pelo `uv.lock`;
-- compilação de `app/` e `tests/` sem erros;
-- overlays `dev` e `prod` renderizados com Kustomize;
-- 13/13 recursos renderizados foram aceitos pelo kubeconform em modo estrito contra schemas Kubernetes 1.36;
-- o container iniciou no CI com as mesmas restrições essenciais do pod e respondeu corretamente aos dois endpoints;
-- `pip-audit` não encontrou vulnerabilidades conhecidas nas dependências declaradas;
-- Trivy não encontrou vulnerabilidades `HIGH` ou `CRITICAL` corrigíveis na imagem final;
-- workflow GitHub Actions concluído com os três jobs aprovados;
-- imagem publicada como `main` e `sha-<commit>`, com SBOM e provenance;
-- acesso anônimo ao manifesto OCI confirmado, sem credenciais;
-- digest auditado fixado nos overlays `dev` e `prod`;
-- Secret Scanning, Push Protection e atualizações de segurança do Dependabot foram habilitados no repositório.
+O terceiro job só roda em pushes e depois dos dois anteriores. É o único a receber `packages: write` e publica a imagem no GHCR. As permissões globais ficam limitadas à leitura do conteúdo, e o checkout não mantém as credenciais Git. Builds obsoletos da mesma referência são cancelados. O BuildKit também gera SBOM e provenance para registrar como o artefato foi produzido.
 
-Execuções do pipeline: <https://github.com/JustShinobi/infra-platform-api/actions/workflows/ci.yml>
+A imagem é construída no job de teste e novamente no de publicação porque os jobs não compartilham o daemon Docker. Isso custa alguns segundos, reduzidos pelo cache, mas evita conceder permissão de publicação ao job que executa código da imagem e garante que nada seja enviado antes dos testes.
 
-### Validação no k3s real
+## Operação e observabilidade
 
-A imagem pública foi baixada diretamente do GHCR e implantada, sem pull secret nem importação manual, em um cluster k3s real. Resultados:
+Os logs do Gunicorn seguem para stdout e stderr, onde podem ser coletados pela plataforma. O endpoint `/info` ajuda a identificar rapidamente a versão, o ambiente e o pod que respondeu à requisição.
 
-- namespace aceito com Pod Security Standard `restricted`;
-- rollout concluído, pod `1/1 Ready`, zero reinícios;
-- readiness e liveness responderam continuamente com HTTP 200;
-- Service ClusterIP respondeu `/healthz` com `{"status":"ok"}`;
-- `/info` retornou o SHA completo, ambiente, mensagem do ConfigMap e hostname do pod;
-- imagem efetiva do containerd correspondeu ao digest público promovido;
-- processo confirmado como `uid=10001 gid=10001`;
-- master e worker Gunicorn confirmados em execução com `gthread`, `/dev/shm` e control socket desabilitado;
-- tentativa de escrita em `/` falhou com `Read-only file system`, confirmando o controle de runtime;
-- logs finais não apresentaram erros, exceptions ou tracebacks.
+Não adicionei Prometheus, tracing ou dashboards porque não há uma plataforma de observabilidade definida e o serviço é pequeno. Em uma operação contínua, o próximo passo seria estruturar os logs em JSON e acompanhar taxa de requisições, erros, duração e saturação, com alertas ligados a objetivos de serviço.
 
-O primeiro rollout Flask havia identificado que o heartbeat padrão do Gunicorn precisava de um diretório temporário gravável e que o control socket tentava criar um arquivo no filesystem raiz. A configuração usa `/dev/shm` para o heartbeat e desabilita o socket não utilizado. O novo smoke test do pipeline reproduz as restrições que revelaram esse problema, prevenindo regressão sem enfraquecer `readOnlyRootFilesystem`.
+## Validação realizada
 
-O Ingress do laboratório apresentou uma limitação de reconciliação no controller compartilhado após um rollout, enquanto Service → Pod, probes e aplicação permaneceram em HTTP 200. O controller não foi reiniciado para evitar impacto em outros workloads. O overlay temporário usado nessa validação foi removido da entrega, pois não faz parte do enunciado e continha detalhes específicos da infraestrutura.
+A validação foi feita em três níveis: ambiente local, GitHub Actions e cluster k3s.
 
-## 8. Publicação e atendimento ao enunciado
+### Código, manifestos e imagem
 
-O repositório está público em <https://github.com/JustShinobi/infra-platform-api>. A imagem está pública em `ghcr.io/justshinobi/infra-platform-api`, foi verificada anonimamente e possui tags `main` e `sha-<commit>`. Assim, tanto o código quanto o artefato podem ser avaliados sem credenciais.
+- Os cinco testes da aplicação passaram, cobrindo funções, endpoints, cabeçalhos e erro 404 em JSON.
+- As oito dependências diretas e transitivas de runtime foram instaladas pelo `uv.lock`.
+- `app/` e `tests/` foram compilados sem erros.
+- Os overlays `dev` e `prod` foram renderizados com Kustomize.
+- Os 13 recursos renderizados passaram pelo kubeconform em modo estrito com os schemas do Kubernetes 1.36.
+- O contêiner respondeu corretamente aos endpoints sob as mesmas restrições essenciais usadas no pod.
+- O `pip-audit` não encontrou vulnerabilidades conhecidas nas dependências declaradas.
+- O Trivy não encontrou vulnerabilidades corrigíveis `HIGH` ou `CRITICAL` na imagem final.
+- Os três jobs do workflow foram concluídos com sucesso.
+- A imagem foi publicada com SBOM e provenance e seu manifesto OCI pôde ser lido sem autenticação.
+- Secret Scanning, Push Protection e as atualizações de segurança do Dependabot estão ativos no repositório.
 
-O pacote privado criado durante o desenvolvimento não é referenciado pela solução final. Foi adotado um nome de pacote novo para que a publicação pública ficasse claramente separada do artefato temporário, sem excluir histórico nem relaxar controles durante o desenvolvimento.
+As execuções do pipeline estão disponíveis em <https://github.com/JustShinobi/infra-platform-api/actions/workflows/ci.yml>.
 
-## 9. Melhorias futuras proporcionais
+### Cluster k3s
 
-- assinatura da imagem com Cosign e policy de verificação;
-- NetworkPolicy alinhada ao CNI do destino;
-- TLS e DNS reais no Ingress;
-- métricas RED e alertas baseados em SLO;
-- promoção GitOps das tags imutáveis entre ambientes.
+A imagem foi baixada diretamente do GHCR, sem pull secret ou importação manual. No cluster:
 
-Esses itens não foram implementados porque exigem decisões do ambiente de destino ou adicionariam operação desnecessária ao projeto.
+- o namespace foi aceito com Pod Security Standard `restricted`;
+- o rollout terminou com o pod `1/1 Ready` e sem reinícios;
+- readiness e liveness responderam com HTTP 200;
+- o Service respondeu aos dois endpoints;
+- `/info` retornou o SHA completo, a mensagem do ConfigMap e o hostname do pod;
+- o digest em execução correspondeu à imagem promovida;
+- o processo rodou como `uid=10001 gid=10001`;
+- master e worker do Gunicorn usaram `gthread` e `/dev/shm`;
+- uma tentativa de escrita em `/` falhou com `Read-only file system`;
+- os logs finais não apresentaram erros, exceções ou tracebacks.
+
+Na primeira implantação, o heartbeat padrão do Gunicorn tentou usar um caminho incompatível com a raiz somente leitura. O control socket também tentava criar um arquivo no mesmo sistema de arquivos. A configuração atual move o heartbeat para `/dev/shm` e desabilita o socket, que não é necessário neste serviço. O smoke test do pipeline reproduz essas restrições para evitar que o problema volte.
+
+O Ingress Controller compartilhado do laboratório deixou de reconciliar a rota depois de um rollout. As probes e o caminho Service → Pod continuaram respondendo com HTTP 200, o que isolou o problema no controller. Não reiniciei esse componente porque ele atende outros workloads; a aplicação foi validada diretamente pelo Service.
+
+## Publicação e próximos passos
+
+O código está disponível em <https://github.com/JustShinobi/infra-platform-api> e a imagem pública em `ghcr.io/justshinobi/infra-platform-api`. Ambos podem ser avaliados sem credenciais.
+
+Algumas evoluções dependem do ambiente em que o serviço será operado:
+
+- assinar a imagem com Cosign e exigir a assinatura na admissão;
+- criar uma NetworkPolicy alinhada ao CNI e aos fluxos reais;
+- configurar DNS e TLS no Ingress;
+- definir métricas e alertas a partir de SLOs;
+- automatizar a promoção entre ambientes com GitOps.
+
+Esses itens não foram incluídos agora porque exigem decisões externas ao projeto. A estrutura atual permite adicioná-los sem alterar a aplicação.

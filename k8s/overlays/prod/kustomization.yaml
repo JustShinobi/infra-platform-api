@@ -10,7 +10,7 @@ configMapGenerator:
     behavior: merge
     literals:
       - APP_ENV=production
-      - APP_MESSAGE=hello from the production overlay
+      - APP_MESSAGE=configuração do ambiente de produção carregada
 patches:
   - path: deployment-patch.yaml
 images:
