@@ -1,4 +1,4 @@
-FROM python:3.13-alpine@sha256:79e7a9b9ff1cbceff819f856fb374477792a5967759d94df266de7b7b4120e6f AS dependencies
+FROM python:3.14-alpine@sha256:9e9fde4d32eedce0b661d9ab91e826b62dddf28e928c230ec55f1866cac66b01 AS dependencies
 
 COPY requirements.lock /tmp/requirements.lock
 RUN python -m pip install \
@@ -8,7 +8,7 @@ RUN python -m pip install \
       --prefix=/install \
       -r /tmp/requirements.lock
 
-FROM python:3.13-alpine@sha256:79e7a9b9ff1cbceff819f856fb374477792a5967759d94df266de7b7b4120e6f AS runtime
+FROM python:3.14-alpine@sha256:9e9fde4d32eedce0b661d9ab91e826b62dddf28e928c230ec55f1866cac66b01 AS runtime
 
 ARG APP_VERSION=dev
 ENV APP_VERSION=${APP_VERSION} \
