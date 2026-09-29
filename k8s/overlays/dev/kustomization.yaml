@@ -15,4 +15,4 @@ patches:
   - path: ingress-patch.yaml
 images:
   - name: ghcr.io/justshinobi/infra-platform-api
-    digest: sha256:fa5cf0ea690e296074ac9358d11de1bba7349aeb764dc4ba874ac503411af55b
+    digest: sha256:acd2797e3d0ed3f754797f36d918d4f343123584101c3eff866d5b4a9c5228dd
