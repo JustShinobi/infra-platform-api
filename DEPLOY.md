@@ -6,26 +6,35 @@ Este guia usa o ambiente `dev` nos exemplos. O overlay `prod` segue o mesmo proc
 
 Você vai precisar de:
 
+- Git e `curl` instalados;
 - um cluster Kubernetes 1.27 ou mais recente, acessível pelo `kubectl`;
 - Kustomize disponível pelo comando `kubectl kustomize`;
 - o binário standalone do Kustomize apenas para usar o comando de promoção de imagem;
-- um Ingress Controller. Os overlays usam a classe `traefik` por padrão;
+- Traefik instalado e uma `IngressClass` chamada `traefik`;
 - acesso à imagem pública `ghcr.io/justshinobi/infra-platform-api`.
 
 O pipeline publica as tags `main` e `sha-<commit>`. Nos overlays, a imagem é fixada pelo digest, portanto uma alteração de tag no registry não muda o artefato implantado.
 
-## 1. Conferir as mudanças
-
-Renderize os manifestos e confira o que será alterado no cluster:
+## 1. Obter o projeto
 
 ```bash
+git clone https://github.com/JustShinobi/infra-platform-api.git
+cd infra-platform-api
+```
+
+## 2. Conferir as mudanças
+
+Crie o namespace antes do primeiro `diff`, renderize os manifestos e confira o que será alterado no cluster:
+
+```bash
+kubectl apply -f k8s/overlays/dev/namespace.yaml
 kubectl kustomize k8s/overlays/dev
 kubectl diff -k k8s/overlays/dev
 ```
 
-O `kubectl diff` retorna código 1 quando encontra diferenças. Nesse caso, o resultado é esperado e não indica falha.
+O `kubectl diff` retorna código 0 quando não há alterações e código 1 quando encontra diferenças. Códigos maiores que 1 indicam erro.
 
-## 2. Implantar em desenvolvimento
+## 3. Implantar em desenvolvimento
 
 ```bash
 kubectl apply -k k8s/overlays/dev
@@ -33,7 +42,7 @@ kubectl rollout status deployment/infra-platform-api -n infra-platform-dev --tim
 kubectl get pods,service,ingress -n infra-platform-dev
 ```
 
-## 3. Testar a aplicação
+## 4. Testar a aplicação
 
 O port-forward permite validar o serviço sem depender de DNS ou do Ingress:
 
@@ -54,11 +63,13 @@ Para testar o Ingress, direcione `infra-platform-api-dev.local` para o endereço
 curl -H 'Host: infra-platform-api-dev.local' http://IP_DO_INGRESS/info
 ```
 
-## 4. Implantar em produção
+## 5. Implantar em produção
 
 O overlay `prod` usa namespace próprio, duas réplicas, recursos maiores, distribuição entre nós e PodDisruptionBudget:
 
 ```bash
+kubectl apply -f k8s/overlays/prod/namespace.yaml
+kubectl diff -k k8s/overlays/prod
 kubectl apply -k k8s/overlays/prod
 kubectl rollout status deployment/infra-platform-api -n infra-platform-prod --timeout=120s
 ```
@@ -73,13 +84,15 @@ kubectl apply -k .
 
 Inclua essa alteração no Git para manter o estado implantado rastreável.
 
+O digest promovido pode pertencer ao commit imediatamente anterior ao `HEAD`: o commit que atualiza o próprio digest também dispara o pipeline e produz uma nova imagem. Isso é esperado. Os overlays apontam para o artefato que já passou pela validação; a tag mutável `main` serve apenas como referência conveniente para a versão mais recente.
+
 Os ConfigMaps recebem um sufixo calculado pelo Kustomize. Quando seu conteúdo muda, a referência no Deployment também muda e o Kubernetes inicia um rollout automaticamente.
 
-## 5. Usar outro Ingress Controller ou domínio
+## 6. Usar outra classe de Ingress ou domínio
 
-Crie um patch no overlay para alterar `spec.ingressClassName` e `spec.rules[].host`. Assim, a base continua compartilhada e não precisa ser copiada. O patch do overlay `dev` serve como referência.
+Se o cluster usa outro nome de classe ou outro controller, crie um patch no overlay para alterar `spec.ingressClassName` e, se necessário, as anotações específicas do controller. Faça o mesmo com `spec.rules[].host` para usar outro domínio. Assim, a base continua compartilhada e não precisa ser copiada. O patch do overlay `dev` serve como referência.
 
-## 6. Remover um ambiente
+## 7. Remover um ambiente
 
 ```bash
 kubectl delete -k k8s/overlays/dev

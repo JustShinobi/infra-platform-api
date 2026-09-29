@@ -34,7 +34,7 @@ A imagem final:
 
 O Alpine foi uma escolha adequada porque as dependências atuais não exigem extensões nativas. A principal ressalva é o uso de musl: se o projeto passasse a depender de bibliotecas como NumPy ou de drivers distribuídos apenas para glibc, uma base `python:slim` seria mais previsível, mesmo com uma imagem maior.
 
-O pipeline publica `main` e `sha-<commit>`, mas os overlays não dependem de tags mutáveis: ambos fixam o digest OCI da imagem promovida. Assim, o conteúdo implantado não muda se uma tag for atualizada no registry. O Dependabot acompanha semanalmente as dependências do `uv`, a imagem base e as actions usadas pelo pipeline.
+O pipeline publica `main` e `sha-<commit>`, mas os overlays não dependem de tags mutáveis: ambos fixam o digest OCI da imagem promovida. Assim, o conteúdo implantado não muda se uma tag for atualizada no registry. O digest pode corresponder ao commit imediatamente anterior ao `HEAD`, porque o commit de promoção também dispara um novo build. Tentar apontar automaticamente para esse novo digest criaria um ciclo de commits e builds; por isso, `main` é apenas uma referência conveniente e o overlay registra o artefato que já passou pela validação. O Dependabot acompanha semanalmente as dependências do `uv`, a imagem base e as actions usadas pelo pipeline.
 
 ## Kubernetes e Kustomize
 
@@ -45,7 +45,7 @@ A base reúne Deployment, Service ClusterIP, ConfigMap, Ingress e ServiceAccount
 
 O pod segue os controles do Pod Security Standard `restricted`: roda como usuário não-root, usa o perfil seccomp padrão, bloqueia elevação de privilégio, remove todas as capabilities e mantém o sistema de arquivos raiz somente leitura. O token do ServiceAccount não é montado porque a aplicação não acessa a API do Kubernetes.
 
-Readiness e liveness consultam `/healthz` com temporizações diferentes. Requests orientam o agendamento e limits impedem consumo sem controle. Durante uma atualização, `maxUnavailable: 0` mantém a instância atual disponível até que a nova esteja pronta. Os ConfigMaps gerados pelo Kustomize recebem um hash no nome; uma alteração de configuração atualiza a referência no pod e inicia o rollout sem intervenção manual.
+Readiness e liveness consultam `/healthz` com temporizações diferentes. A readiness começa cedo para liberar tráfego assim que a instância estiver pronta, enquanto a liveness aguarda 20 segundos antes da primeira verificação para não disputar recursos com a inicialização do Gunicorn. Requests orientam o agendamento e limits impedem consumo sem controle. Durante uma atualização, `maxUnavailable: 0` mantém a instância atual disponível até que a nova esteja pronta. Os ConfigMaps gerados pelo Kustomize recebem um hash no nome; uma alteração de configuração atualiza a referência no pod e inicia o rollout sem intervenção manual.
 
 Não incluí HPA porque não há teste de carga nem histórico de uso que sustente um limite de escala. Sem esses dados, qualquer valor seria um chute e poderia escalar cedo ou tarde demais. A NetworkPolicy também ficou fora da base: sua configuração depende do CNI, do Ingress Controller e dos fluxos permitidos no cluster de destino. Uma política genérica poderia bloquear as probes ou o tráfego do Ingress. Com esses fluxos conhecidos, ela pode ser adicionada sem esse risco.
 
@@ -104,7 +104,7 @@ A imagem foi baixada diretamente do GHCR, sem pull secret ou importação manual
 
 Na primeira implantação, o heartbeat padrão do Gunicorn tentou usar um caminho incompatível com a raiz somente leitura. O control socket também tentava criar um arquivo no mesmo sistema de arquivos. A configuração atual move o heartbeat para `/dev/shm` e desabilita o socket, que não é necessário neste serviço. O smoke test do pipeline reproduz essas restrições para evitar que o problema volte.
 
-O Ingress Controller compartilhado do laboratório deixou de reconciliar a rota depois de um rollout. As probes e o caminho Service → Pod continuaram respondendo com HTTP 200, o que isolou o problema no controller. Não reiniciei esse componente porque ele atende outros workloads; a aplicação foi validada diretamente pelo Service.
+O manifesto público usa a classe genérica `traefik`, mas o laboratório oferece apenas `traefik-prod`. Testei a adaptação recriando somente o Ingress de desenvolvimento com essa classe: o recurso recebeu o endereço `10.20.70.72`, porém o Traefik compartilhado continuou devolvendo HTTP 404 para o host configurado, sinal de que a rota não entrou na configuração ativa. As probes e o caminho Service → Pod permaneceram em HTTP 200. Não reiniciei o controller porque ele atende outros workloads; a aplicação foi validada diretamente pelo Service e a documentação explica como adaptar a classe no cluster de destino.
 
 ## Publicação e próximos passos
 
