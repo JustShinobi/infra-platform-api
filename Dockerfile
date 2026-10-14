@@ -1,6 +1,6 @@
 FROM ghcr.io/astral-sh/uv:0.12.20@sha256:100047e74f30778ab704942321a09750d6158739573ff58bf3924085cc6cd2d8 AS uv
 
-FROM python:3.14-alpine@sha256:9e9fde4d32eedce0b661d9ab91e826b62dddf28e928c230ec55f1866cac66b01 AS dependencies
+FROM python:3.14-alpine@sha256:f6a589d43c42b9e7f7dc67a12d37132491f362859a5d750607710cc56da3bc72 AS dependencies
 
 ENV UV_LINK_MODE=copy \
     UV_PYTHON_DOWNLOADS=never
@@ -12,7 +12,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv lock --check \
     && uv sync --frozen --no-dev --no-install-project
 
-FROM python:3.14-alpine@sha256:9e9fde4d32eedce0b661d9ab91e826b62dddf28e928c230ec55f1866cac66b01 AS runtime
+FROM python:3.14-alpine@sha256:f6a589d43c42b9e7f7dc67a12d37132491f362859a5d750607710cc56da3bc72 AS runtime
 
 ARG APP_VERSION=dev
 ENV APP_VERSION=${APP_VERSION} \
